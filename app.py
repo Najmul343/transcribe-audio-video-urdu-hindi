@@ -1,6 +1,9 @@
+%%writefile app.py
 import streamlit as st
-import os, yt_dlp, requests, ffmpeg
 from faster_whisper import WhisperModel
+from faster_whisper.audio import decode_audio
+import numpy as np
+import tempfile
 
 # Optional transliteration
 try:
@@ -8,68 +11,33 @@ try:
 except:
     akshara_convert = None
 
+# -----------------------------------------------
+# PAGE UI
+# -----------------------------------------------
 st.set_page_config(page_title="Whisper Transcriber", layout="wide")
-st.title("🎙️ Whisper Transcriber (YouTube + Upload)")
-st.write("Select language → Upload a file OR paste a YouTube link → Transcribe.")
+st.title("🎙️ Whisper Transcriber (Upload Audio/Video)")
+st.write("Upload audio/video → select language → get transcript.")
 
-# -----------------------------------------------------
-# INPUT MODE
-# -----------------------------------------------------
-mode = st.radio("Choose Input Type:", ["Upload File", "YouTube URL"], horizontal=True)
-
-youtube_url = ""
-uploaded_file = None
-
-if mode == "YouTube URL":
-    youtube_url = st.text_input("Paste YouTube Link Here:")
-
-if mode == "Upload File":
-    uploaded_file = st.file_uploader("Upload Audio/Video File",
-                                     type=["mp3","wav","m4a","mp4","mov"])
-
-
-# -----------------------------------------------------
-# LANGUAGE SELECTOR
-# -----------------------------------------------------
-language_choice = st.selectbox(
-    "Select transcription language:",
-    [
-        "Urdu (Arabic Script)",
-        "Hindi (Devanagari Script)",
-        "Roman (Hinglish)",
-        "English"
-    ],
+# -----------------------------------------------
+# FILE UPLOADER
+# -----------------------------------------------
+uploaded_file = st.file_uploader(
+    "Upload Audio or Video File",
+    type=["mp3", "wav", "m4a", "mp4", "mov", "mkv"]
 )
 
-# -----------------------------------------------------
-# YOUTUBE DOWNLOAD (Streamlit Cloud Safe)
-# -----------------------------------------------------
-def download_youtube(url):
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": "yt.%(ext)s",
-        "quiet": True,
-        "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
-        ],
-    }
+# -----------------------------------------------
+# LANGUAGE SELECTOR
+# -----------------------------------------------
+language_choice = st.selectbox(
+    "Select transcription language:",
+    ["Urdu (Arabic Script)",
+     "Hindi (Devanagari Script)",
+     "Roman (Hinglish)",
+     "English"]
+)
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-
-        for f in os.listdir():
-            if f.startswith("yt") and f.endswith(".mp3"):
-                return f
-
-    except:
-        return None
-
-    return None
-
-# -----------------------------------------------------
-# TRANSLITERATION
-# -----------------------------------------------------
+# Transliteration helpers
 def to_hindi(text):
     if akshara_convert:
         try:
@@ -86,67 +54,47 @@ def to_urdu(text):
             return text
     return text
 
-
-# -----------------------------------------------------
+# -----------------------------------------------
 # TRANSCRIBE BUTTON
-# -----------------------------------------------------
+# -----------------------------------------------
 if st.button("Start Transcription"):
-    st.write("### ⏳ Processing...")
+    if not uploaded_file:
+        st.error("Please upload a file first!")
+        st.stop()
 
-    # 🎬 FUNNY GIF DURING TRANSCRIPTION
+    # GIF while busy
     gif_placeholder = st.empty()
     gif_placeholder.image(
         "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcW5yeTl3OW0weG1sbnMydGhycjY0a2I2ZGlyNWQwazVzaTYycnMzMCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/jU8yHwHSAoHvepN65t/giphy.gif",
         width=350
     )
-    st.write("👨‍💻 Transcribing your audio... He's writing FAST! 💨")
+    st.write("👨‍💻 Extracting audio & transcribing...")
 
-    # -----------------------------------------------------
-    # LOAD INPUT
-    # -----------------------------------------------------
-    if mode == "Upload File":
-        if uploaded_file is None:
-            st.error("❌ Please upload a file first.")
-            gif_placeholder.empty()
-            st.stop()
+    # -----------------------------------------------
+    # SAVE UPLOADED FILE TEMPORARILY
+    # -----------------------------------------------
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        temp_path = tmp.name
 
-        with open("inputfile", "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        input_path = "inputfile"
+    # -----------------------------------------------
+    # LOAD WHISPER MODEL (CPU SAFE)
+    # -----------------------------------------------
+    model = WhisperModel("small", device="cpu", compute_type="int8")
 
-    else:
-        if youtube_url.strip() == "":
-            st.error("❌ Paste a YouTube URL.")
-            gif_placeholder.empty()
-            st.stop()
-
-        input_path = download_youtube(youtube_url)
-        if input_path is None:
-            st.error("❌ Could not download audio. Try another link.")
-            gif_placeholder.empty()
-            st.stop()
-
-    # -----------------------------------------------------
-    # CONVERT ANY INPUT → WAV (ffmpeg-python)
-    # -----------------------------------------------------
-    wav_path = "audio.wav"
-
+    # -----------------------------------------------
+    # EXTRACT AUDIO DIRECTLY (NO FFMPEG NEEDED)
+    # -----------------------------------------------
     try:
-        (
-            ffmpeg
-            .input(input_path)
-            .output(wav_path, ac=1, ar=16000)
-            .run(overwrite_output=True, quiet=True)
-        )
+        # decode_audio returns 16kHz floating audio array
+        audio = decode_audio(temp_path)
     except Exception as e:
-        st.error(f"FFmpeg conversion error: {e}")
         gif_placeholder.empty()
+        st.error(f"Audio extraction failed: {e}")
         st.stop()
 
-    # -----------------------------------------------------
-    # LOAD WHISPER (CPU SAFE)
-    # -----------------------------------------------------
-    model = WhisperModel("small", device="cpu", compute_type="int8")
+    # Convert to Whisper’s expected format
+    audio = np.array(audio).astype("float32")
 
     lang_map = {
         "Urdu (Arabic Script)": "ur",
@@ -154,35 +102,38 @@ if st.button("Start Transcription"):
         "Roman (Hinglish)": "en",
         "English": "en"
     }
-
     lang_code = lang_map[language_choice]
 
-    # -----------------------------------------------------
-    # TRANSCRIPTION
-    # -----------------------------------------------------
+    # -----------------------------------------------
+    # TRANSCRIBE
+    # -----------------------------------------------
     segments, _ = model.transcribe(
-        wav_path,
+        audio,
         language=lang_code,
         vad_filter=True
     )
 
     final_text = ""
-
     for seg in segments:
-        text = seg.text.strip()
+        t = seg.text.strip()
 
         if language_choice == "Hindi (Devanagari Script)":
-            text = to_hindi(text)
+            t = to_hindi(t)
         elif language_choice == "Urdu (Arabic Script)":
-            text = to_urdu(text)
+            t = to_urdu(t)
 
-        final_text += text + " "
+        final_text += t + " "
 
-    # -----------------------------------------------------
+    # -----------------------------------------------
     # OUTPUT
-    # -----------------------------------------------------
+    # -----------------------------------------------
     gif_placeholder.empty()
     st.success("✅ Transcription Completed!")
+
     st.text_area("📄 Transcription Output:", final_text, height=300)
 
-    st.download_button("⬇ Download Transcript", data=final_text, file_name="transcript.txt")
+    st.download_button(
+        "⬇ Download Transcript",
+        data=final_text,
+        file_name="transcript.txt"
+    )
