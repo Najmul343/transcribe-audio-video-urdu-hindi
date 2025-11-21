@@ -1,8 +1,6 @@
 import streamlit as st
-import os, yt_dlp, requests
-from pydub import AudioSegment
+import os, yt_dlp, requests, ffmpeg
 from faster_whisper import WhisperModel
-from pathlib import Path
 
 # Optional transliteration
 try:
@@ -44,12 +42,12 @@ language_choice = st.selectbox(
 )
 
 # -----------------------------------------------------
-# DOWNLOAD (Simplified for Streamlit Cloud)
+# YOUTUBE DOWNLOAD (Streamlit Cloud Safe)
 # -----------------------------------------------------
 def download_youtube(url):
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": "yt_audio.%(ext)s",
+        "outtmpl": "yt.%(ext)s",
         "quiet": True,
         "postprocessors": [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
@@ -61,17 +59,17 @@ def download_youtube(url):
             ydl.download([url])
 
         for f in os.listdir():
-            if f.startswith("yt_audio") and f.endswith(".mp3"):
+            if f.startswith("yt") and f.endswith(".mp3"):
                 return f
 
-    except Exception as e:
-        st.error("YouTube download failed. Try a different link.")
+    except:
         return None
 
     return None
 
-
-# Transliteration helpers
+# -----------------------------------------------------
+# TRANSLITERATION
+# -----------------------------------------------------
 def to_hindi(text):
     if akshara_convert:
         try:
@@ -95,7 +93,7 @@ def to_urdu(text):
 if st.button("Start Transcription"):
     st.write("### ⏳ Processing...")
 
-    # 🎬 Funny GIF
+    # 🎬 FUNNY GIF DURING TRANSCRIPTION
     gif_placeholder = st.empty()
     gif_placeholder.image(
         "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcW5yeTl3OW0weG1sbnMydGhycjY0a2I2ZGlyNWQwazVzaTYycnMzMCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/jU8yHwHSAoHvepN65t/giphy.gif",
@@ -114,33 +112,41 @@ if st.button("Start Transcription"):
 
         with open("inputfile", "wb") as f:
             f.write(uploaded_file.getbuffer())
-        filename = "inputfile"
+        input_path = "inputfile"
 
     else:
         if youtube_url.strip() == "":
-            st.error("❌ Please paste a YouTube URL.")
+            st.error("❌ Paste a YouTube URL.")
             gif_placeholder.empty()
             st.stop()
 
-        filename = download_youtube(youtube_url)
-        if filename is None:
+        input_path = download_youtube(youtube_url)
+        if input_path is None:
+            st.error("❌ Could not download audio. Try another link.")
             gif_placeholder.empty()
             st.stop()
 
-    # Convert to WAV
-    audio = AudioSegment.from_file(filename)
-    audio.export("audio.wav", format="wav")
+    # -----------------------------------------------------
+    # CONVERT ANY INPUT → WAV (ffmpeg-python)
+    # -----------------------------------------------------
+    wav_path = "audio.wav"
+
+    try:
+        (
+            ffmpeg
+            .input(input_path)
+            .output(wav_path, ac=1, ar=16000)
+            .run(overwrite_output=True, quiet=True)
+        )
+    except Exception as e:
+        st.error(f"FFmpeg conversion error: {e}")
+        gif_placeholder.empty()
+        st.stop()
 
     # -----------------------------------------------------
-    # LOAD WHISPER (CPU MODE)
+    # LOAD WHISPER (CPU SAFE)
     # -----------------------------------------------------
-    st.write("🔧 Loading Whisper model (small) — CPU mode for Streamlit Cloud...")
-
-    model = WhisperModel(
-        "small",
-        device="cpu",
-        compute_type="int8"
-    )
+    model = WhisperModel("small", device="cpu", compute_type="int8")
 
     lang_map = {
         "Urdu (Arabic Script)": "ur",
@@ -155,7 +161,7 @@ if st.button("Start Transcription"):
     # TRANSCRIPTION
     # -----------------------------------------------------
     segments, _ = model.transcribe(
-        "audio.wav",
+        wav_path,
         language=lang_code,
         vad_filter=True
     )
@@ -175,14 +181,8 @@ if st.button("Start Transcription"):
     # -----------------------------------------------------
     # OUTPUT
     # -----------------------------------------------------
-    st.success("✅ Transcription Completed Successfully!")
-
     gif_placeholder.empty()
-
+    st.success("✅ Transcription Completed!")
     st.text_area("📄 Transcription Output:", final_text, height=300)
 
-    st.download_button(
-        "⬇ Download Transcript",
-        data=final_text,
-        file_name="transcript.txt"
-    )
+    st.download_button("⬇ Download Transcript", data=final_text, file_name="transcript.txt")
