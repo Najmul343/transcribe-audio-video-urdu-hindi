@@ -1,4 +1,4 @@
-%%writefile app.py
+
 import streamlit as st
 from faster_whisper import WhisperModel
 from faster_whisper.audio import decode_audio
