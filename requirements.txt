@@ -5,4 +5,3 @@ fpdf2>=2.8.5
 numpy>=1.21.0
 torch>=2.0.0
 requests>=2.31.0
-streamlit-audio-recorder>=0.1.0  # ← Fixed, stable component
