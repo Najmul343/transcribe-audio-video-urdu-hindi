@@ -6,12 +6,13 @@ import tempfile
 import os
 import re
 from groq import Groq
-from fpdf import FPDF
+from fpdf import FPDF  # Now fpdf2
 import base64
 from io import BytesIO
+import requests  # For font download
 
 # ------------------- PREMIUM PAGE STYLE -------------------
-st.set_page_config(page_title="Urdu Pro", layout="centered", page_icon="black_circle")
+st.set_page_config(page_title="Urdu Pro", layout="centered", page_icon="🎙️")
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
@@ -23,24 +24,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<h1 class='title'>Urdu Pro</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center; font-size:18px; color:#64748b;'>Upload audio → Get perfect newspaper-quality Urdu script instantly</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center; font-size:18px; color:#64748b;'>Upload audio → Get perfect, grammatically correct Urdu script instantly</p>", unsafe_allow_html=True)
 
 # ------------------- GROQ CLIENT -------------------
-client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+@st.cache_resource
+def get_groq_client():
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+client = get_groq_client()
 
 # ------------------- UPLOAD & LANGUAGE -------------------
-uploaded_file = st.file_uploader("", type=["mp3","wav","m4a","mp4","mov","mkv"])
-language_choice = "ur"  # Forced Urdu
-
+uploaded_file = st.file_uploader("Upload Audio/Video", type=["mp3","wav","m4a","mp4","mov","mkv"])
 if st.button("✨ Generate Perfect Urdu Script", type="primary"):
     if not uploaded_file:
         st.error("Please upload an audio/video file")
         st.stop()
 
     # Premium loading
-    with st.spinner(""):
+    with st.spinner("Processing your audio…"):
         placeholder = st.empty()
-        placeholder.markdown("<div class='card'><h2 style='text-align:center'>Processing your audio…</h2></div>", unsafe_allow_html=True)
+        placeholder.markdown("<div class='card'><h2 style='text-align:center'>Extracting & Transcribing...</h2></div>", unsafe_allow_html=True)
 
         # Save temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp:
@@ -53,48 +56,84 @@ if st.button("✨ Generate Perfect Urdu Script", type="primary"):
         audio = np.array(audio).astype("float32")
         segments, _ = model.transcribe(audio, language="ur", vad_filter=True)
 
-        raw = " ".join(seg.text.strip() for seg in segments)
-
-        # AI Correction (exact words, perfect punctuation & paragraphs)
-        prompt = f"""Fix ONLY spelling, punctuation, spacing and paragraph breaks.
-Keep every single word exactly the same. No paraphrasing, no additions, no removals.
-
-RAW:
-{raw}
-
-PERFECT URDU SCRIPT:"""
-
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=4096
-        )
-        perfect_urdu = response.choices[0].message.content.strip()
-        if "PERFECT URDU SCRIPT:" in perfect_urdu:
-            perfect_urdu = perfect_urdu.split("PERFECT URDU SCRIPT:")[-1].strip()
+        raw_sentences = [seg.text.strip() for seg in segments if seg.text.strip()]
 
         # Clean up temp file
         os.unlink(temp_path)
 
-        # Final beautiful display
         placeholder.empty()
-        st.balloons()
 
-        st.markdown(f"<div class='card'><div class='urdu'>{perfect_urdu}</div></div>", unsafe_allow_html=True)
+    # ------------------- ENHANCED LLM CORRECTION (Sentence-by-Sentence) -------------------
+    with st.spinner("AI Processing: Correcting grammar, spelling & flow word-by-word..."):
+        corrected_sentences = []
+        for sent in raw_sentences:
+            if len(sent) < 3:  # Skip noise
+                continue
+            # Enhanced prompt: Focus on each word/sentence for sense-making corrections
+            prompt = f"""You are an expert Urdu grammarian and editor. Process this single sentence from speech-to-text.
 
-        # Downloads
-        col1, col2 = st.columns(2)
-        with col1:
-            st.download_button("Download TXT", perfect_urdu, "perfect_urdu.txt", "text/plain")
-        with col2:
+RULES (STRICT):
+- Analyze EACH WORD for spelling/grammar errors and correct ONLY if it makes grammatical/semantic sense (e.g., 'بیارات' → 'بیماری' if context fits; keep original if ambiguous).
+- Fix sentence structure for natural flow, but DO NOT change meaning, add/remove words, or paraphrase.
+- Add proper Urdu punctuation (، ؟ ۔) and ensure readability.
+- Output ONLY the corrected sentence. No explanations.
+
+RAW SENTENCE:
+{sent}
+
+CORRECTED SENTENCE:"""
+
+            response = client.chat.completions.create(
+                model="llama-3.1-70b-versatile",  # Better multilingual/Urdu model
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.05,  # Ultra-low for precision
+                max_tokens=256  # Per sentence
+            )
+            corrected_sent = response.choices[0].message.content.strip()
+            if "CORRECTED SENTENCE:" in corrected_sent:
+                corrected_sent = corrected_sent.split("CORRECTED SENTENCE:")[-1].strip()
+            corrected_sentences.append(corrected_sent)
+
+        perfect_urdu = ' '.join(corrected_sentences).strip()
+        # Add paragraph breaks heuristically (after questions/topics)
+        perfect_urdu = re.sub(r'([؟۔])\s*([ا-ی][^۔؟]{50,})', r'\1\n\n\2', perfect_urdu)
+
+    st.balloons()
+    st.success("✅ Perfect Urdu Script Generated!")
+
+    # ------------------- BEAUTIFUL DISPLAY -------------------
+    st.markdown(f"<div class='card'><div class='urdu'>{perfect_urdu}</div></div>", unsafe_allow_html=True)
+
+    # ------------------- DOWNLOADS -------------------
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📥 Download TXT", perfect_urdu, "perfect_urdu.txt", "text/plain")
+    with col2:
+        # Fixed PDF Generation with fpdf2 + Downloaded Font
+        try:
+            # Download Noto Nastaliq Urdu TTF (free Google font)
+            font_url = "https://github.com/google/fonts/raw/main/ofl/notonastaliqurdu/NotoNastaliqUrdu-Regular.ttf"
+            font_response = requests.get(font_url)
+            font_path = tempfile.NamedTemporaryFile(delete=False, suffix=".ttf").name
+            with open(font_path, "wb") as f:
+                f.write(font_response.content)
+
             pdf = FPDF()
             pdf.add_page()
-            pdf.add_font("NotoNastaliq", "", "https://github.com/google/fonts/raw/main/ofl/notonastaliqurdu/NotoNastaliqUrdu%5Bwght%5D.ttf", uni=True)
-            pdf.set_font("NotoNastaliq", size=20)
-            pdf.multi_cell(0, 12, perfect_urdu)
-            pdf_bytes = pdf.output(dest='S').encode('latin1')
-            b64 = base64.b64encode(pdf_bytes).decode()
-            st.download_button("Download PDF", pdf_bytes, "perfect_urdu.pdf", "application/pdf")
+            pdf.add_font("NastaliqUrdu", "", font_path, uni=True)  # Embed local TTF
+            pdf.set_font("NastaliqUrdu", size=18)
+            pdf.set_right_margin(20)  # RTL support
+            pdf.multi_cell(0, 10, perfect_urdu)  # Line height for readability
 
-st.caption("Powered by AI-LLMs • Made for perfect Urdu")
+            pdf_bytes = BytesIO()
+            pdf.output(pdf_bytes)
+            pdf_data = pdf_bytes.getvalue()
+
+            # Clean temp font file
+            os.unlink(font_path)
+
+            st.download_button("📄 Download PDF (Nastaliq Font)", pdf_data, "perfect_urdu.pdf", "application/pdf")
+        except Exception as e:
+            st.warning(f"PDF failed (font issue): {e}. TXT download is perfect!")
+
+st.caption("Powered by faster-whisper + Groq Llama 3.1 70B • Grammar & Spelling Perfected")
