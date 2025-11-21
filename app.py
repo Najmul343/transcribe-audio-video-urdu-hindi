@@ -6,7 +6,7 @@ import tempfile
 import os
 import re
 from groq import Groq
-from fpdf import FPDF  # Now fpdf2
+from fpdf import FPDF  # fpdf2
 import base64
 from io import BytesIO
 import requests  # For font download
@@ -33,7 +33,7 @@ def get_groq_client():
 
 client = get_groq_client()
 
-# ------------------- UPLOAD & LANGUAGE -------------------
+# ------------------- UPLOAD -------------------
 uploaded_file = st.file_uploader("Upload Audio/Video", type=["mp3","wav","m4a","mp4","mov","mkv"])
 if st.button("✨ Generate Perfect Urdu Script", type="primary"):
     if not uploaded_file:
@@ -63,43 +63,45 @@ if st.button("✨ Generate Perfect Urdu Script", type="primary"):
 
         placeholder.empty()
 
-    # ------------------- ENHANCED LLM CORRECTION (Sentence-by-Sentence) -------------------
-    with st.spinner("AI Processing: Correcting grammar, spelling & flow word-by-word..."):
+    # ------------------- ENHANCED LLM CORRECTION (Word/Sentence-by-Sentence) -------------------
+    with st.spinner("AI Processing: Scanning each word & sentence for grammar/spelling corrections..."):
         corrected_sentences = []
-        for sent in raw_sentences:
-            if len(sent) < 3:  # Skip noise
+        batch_size = 2  # Process 1-2 sentences per call for precision
+        for i in range(0, len(raw_sentences), batch_size):
+            batch = ' '.join(raw_sentences[i:i+batch_size])
+            if len(batch) < 5:  # Skip noise
                 continue
-            # Enhanced prompt: Focus on each word/sentence for sense-making corrections
-            prompt = f"""You are an expert Urdu grammarian and editor. Process this single sentence from speech-to-text.
+            # Enhanced prompt: Word-by-word + sentence sense-making
+            prompt = f"""You are an expert Urdu grammarian. Process this batch of 1-2 sentences from speech-to-text.
 
-RULES (STRICT):
-- Analyze EACH WORD for spelling/grammar errors and correct ONLY if it makes grammatical/semantic sense (e.g., 'بیارات' → 'بیماری' if context fits; keep original if ambiguous).
-- Fix sentence structure for natural flow, but DO NOT change meaning, add/remove words, or paraphrase.
-- Add proper Urdu punctuation (، ؟ ۔) and ensure readability.
-- Output ONLY the corrected sentence. No explanations.
+STRICT RULES:
+- Scan EACH WORD individually: Correct spelling/grammar ONLY if it makes semantic/grammatical sense in context (e.g., 'بیارات' → 'بیماری' for disease; 'جاہداد' → 'جائیداد' for property; keep ambiguous words original).
+- For each SENTENCE: Ensure natural flow and structure without changing meaning, adding/removing words, or paraphrasing.
+- Add proper Urdu punctuation (، ؟ ۔ !) and fix spacing for readability.
+- Output ONLY the corrected sentences, separated by spaces. No explanations or extras.
 
-RAW SENTENCE:
-{sent}
+RAW BATCH:
+{batch}
 
-CORRECTED SENTENCE:"""
+CORRECTED BATCH:"""
 
             response = client.chat.completions.create(
-                model="llama-3.1-70b-versatile",  # Better multilingual/Urdu model
+                model="llama-3.1-8b-instant",  # Valid & fast Groq model (fixed error)
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.05,  # Ultra-low for precision
-                max_tokens=256  # Per sentence
+                temperature=0.05,  # Low for precise corrections
+                max_tokens=512  # Enough for batch
             )
-            corrected_sent = response.choices[0].message.content.strip()
-            if "CORRECTED SENTENCE:" in corrected_sent:
-                corrected_sent = corrected_sent.split("CORRECTED SENTENCE:")[-1].strip()
-            corrected_sentences.append(corrected_sent)
+            corrected_batch = response.choices[0].message.content.strip()
+            if "CORRECTED BATCH:" in corrected_batch:
+                corrected_batch = corrected_batch.split("CORRECTED BATCH:")[-1].strip()
+            corrected_sentences.extend(corrected_batch.split(' ') if ' ' in corrected_batch else [corrected_batch])
 
         perfect_urdu = ' '.join(corrected_sentences).strip()
-        # Add paragraph breaks heuristically (after questions/topics)
-        perfect_urdu = re.sub(r'([؟۔])\s*([ا-ی][^۔؟]{50,})', r'\1\n\n\2', perfect_urdu)
+        # Smart paragraph breaks: After questions or long pauses
+        perfect_urdu = re.sub(r'([؟۔!])\s*([ا-ی][^۔؟!]{40,})', r'\1\n\n\2', perfect_urdu)
 
     st.balloons()
-    st.success("✅ Perfect Urdu Script Generated!")
+    st.success("✅ Perfect Urdu Script Generated! (Word-by-word grammar & spelling fixed)")
 
     # ------------------- BEAUTIFUL DISPLAY -------------------
     st.markdown(f"<div class='card'><div class='urdu'>{perfect_urdu}</div></div>", unsafe_allow_html=True)
@@ -109,9 +111,9 @@ CORRECTED SENTENCE:"""
     with col1:
         st.download_button("📥 Download TXT", perfect_urdu, "perfect_urdu.txt", "text/plain")
     with col2:
-        # Fixed PDF Generation with fpdf2 + Downloaded Font
+        # Fixed PDF with downloaded font
         try:
-            # Download Noto Nastaliq Urdu TTF (free Google font)
+            # Download Noto Nastaliq Urdu TTF
             font_url = "https://github.com/google/fonts/raw/main/ofl/notonastaliqurdu/NotoNastaliqUrdu-Regular.ttf"
             font_response = requests.get(font_url)
             font_path = tempfile.NamedTemporaryFile(delete=False, suffix=".ttf").name
@@ -120,20 +122,19 @@ CORRECTED SENTENCE:"""
 
             pdf = FPDF()
             pdf.add_page()
-            pdf.add_font("NastaliqUrdu", "", font_path, uni=True)  # Embed local TTF
+            pdf.add_font("NastaliqUrdu", "", font_path, uni=True)
             pdf.set_font("NastaliqUrdu", size=18)
-            pdf.set_right_margin(20)  # RTL support
-            pdf.multi_cell(0, 10, perfect_urdu)  # Line height for readability
+            pdf.set_right_margin(20)  # RTL
+            pdf.multi_cell(0, 10, perfect_urdu)
 
             pdf_bytes = BytesIO()
             pdf.output(pdf_bytes)
             pdf_data = pdf_bytes.getvalue()
 
-            # Clean temp font file
-            os.unlink(font_path)
+            os.unlink(font_path)  # Cleanup
 
             st.download_button("📄 Download PDF (Nastaliq Font)", pdf_data, "perfect_urdu.pdf", "application/pdf")
         except Exception as e:
-            st.warning(f"PDF failed (font issue): {e}. TXT download is perfect!")
+            st.warning(f"PDF failed: {e}. TXT is perfect!")
 
-st.caption("Powered by faster-whisper + Groq Llama 3.1 70B • Grammar & Spelling Perfected")
+st.caption("Powered by faster-whisper + Groq Llama 3.1 8B • Precise Word/Sentence Corrections")
