@@ -125,7 +125,59 @@ if st.button("✨ Generate Perfect Urdu Script", type="primary"):
 
     st.balloons()
     st.success("✅ Perfect Urdu Script Generated! (Grammar & Spelling Fixed, No Paraphrasing)")
+########################################
 
+
+# ←←←← Add this at the top with other imports
+# pip install streamlit-mic-recorder
+
+# ——————————————————————
+# NEW: Live Voice Recording Option
+# ——————————————————————
+st.markdown("### یا براہِ راست آواز ریکارڈ کریں")
+
+col_rec1, col_rec2 = st.columns([1, 4])
+with col_rec1:
+    audio_bytes = mic_recorder(
+        start_prompt="ریکارڈ شروع کریں",
+        stop_prompt="رکائیں",
+        format="wav",
+        key="mic_recorder_urdu"
+    )
+
+# If user recorded something
+if audio_bytes:
+    st.audio(audio_bytes, format="audio/wav")
+    
+    # Save temporarily and process exactly like uploaded file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(audio_bytes)
+        temp_path = tmp.name
+
+    with st.spinner("آواز سے اردو ٹرانسکرائب ہو رہا ہے..."):
+        model = WhisperModel("small", device="cpu", compute_type="int8")
+        audio = decode_audio(temp_path)
+        audio = np.array(audio).astype("float32")
+        segments, _ = model.transcribe(audio, language="ur", vad_filter=True)
+        raw_text = " ".join([seg.text.strip() for seg in segments if seg.text.strip()])
+        os.unlink(temp_path)
+
+    # ←←← Same chunking + Kimi-K2 correction code you already have
+    # (Just paste the exact chunking + correct_urdu_chunk() code here again)
+    # ... [your existing chunking + LLM correction code] ...
+
+    # Final display (same as before)
+    st.balloons()
+    st.success("ریکارڈنگ سے مکمل اردو سکرپٹ تیار!")
+    st.markdown(f"<div class='card'><div class='urdu'>{perfect_urdu}</div></div>", unsafe_allow_html=True)
+
+    # Downloads
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("Download TXT", perfect_urdu, "voice_urdu.txt", "text/plain")
+    with col2:
+        # PDF code same as before
+        pass
     # ------------------- BEAUTIFUL DISPLAY -------------------
     st.markdown(f"<div class='card'><div class='urdu'>{perfect_urdu}</div></div>", unsafe_allow_html=True)
 
