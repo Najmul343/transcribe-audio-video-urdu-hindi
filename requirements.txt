@@ -1,0 +1,7 @@
+streamlit
+faster-whisper
+pydub
+yt-dlp
+requests
+aksharamukha
+ffmpeg-python
