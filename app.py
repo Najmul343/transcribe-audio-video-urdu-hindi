@@ -10,9 +10,9 @@ from fpdf import FPDF  # fpdf2 for Unicode
 import requests
 import base64
 from io import BytesIO
-from audio_recorder_streamlit import audio_recorder  # Fixed import — stable browser recorder
+import streamlit_audio_recorder as st_ar  # Fixed import: streamlit-audio-recorder
 
-# ------------------- PREMIUM PAGE STYLE (Inspired by slice.wbrain.me: Clean Cards + Minimalist) -------------------
+# ------------------- PREMIUM PAGE STYLE (slice.wbrain.me Inspired: Clean, Card-Based) -------------------
 st.set_page_config(page_title="Urdu Pro", layout="centered", page_icon="🎙️")
 st.markdown("""
 <style>
@@ -28,7 +28,7 @@ st.markdown("""
 
 st.markdown('<div class="main">', unsafe_allow_html=True)
 st.markdown("<h1 class='title'>Urdu Pro</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center; font-size:18px; color:#64748b;'>Record your voice or upload audio → Get perfect Urdu script with grammar & spelling fixes</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center; font-size:18px; color:#64748b;'>Record voice or upload audio → Get perfect Urdu script with grammar fixes</p>", unsafe_allow_html=True)
 
 # ------------------- GROQ CLIENT -------------------
 @st.cache_resource
@@ -69,27 +69,26 @@ Corrected Chunk:"""
         st.error(f"LLM correction failed: {e}")
         return raw_chunk
 
-# ------------------- UPLOAD OPTION (Your Original) -------------------
+# ------------------- UPLOAD OPTION -------------------
 st.markdown("### 1. Upload Audio/Video File")
 uploaded_file = st.file_uploader("", type=["mp3","wav","m4a","mp4","mov","mkv"])
 
-# ------------------- LIVE VOICE RECORDING (Fixed with audio-recorder-streamlit) -------------------
-st.markdown("### 2. یا براہِ راست آواز ریکارڈ کریں (Live Recording)")
+# ------------------- LIVE VOICE RECORDING (Fixed with streamlit-audio-recorder) -------------------
+st.markdown("### 2. براہِ راست آواز ریکارڈ کریں (Live Recording)")
 st.markdown('<div class="card">', unsafe_allow_html=True)
 
-# Big, prominent mic button (slice.wbrain.me style: Simple, gradient)
-audio_bytes = audio_recorder(
+# Fixed recorder: Simple args only (no energy_threshold to avoid TypeError)
+audio_bytes = st_ar.audio_recorder(
     key="voice_recorder",
-    mode="default",  # Or "energy_threshold" for auto-stop
-    energy_threshold=(-1.0, 0.0),  # Adjust sensitivity
-    pause_threshold=1.0  # Pause detection
+    sample_rate=44100,  # Standard for WAV
+    # No pause_threshold—uses manual stop button (stable)
 )
 
 if audio_bytes is not None:
-    # Preview audio
+    # Preview the recording
     st.audio(audio_bytes, format="audio/wav")
     
-    # Process recording (same as upload)
+    # Process as temp file (same as upload)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         tmp.write(audio_bytes)
         temp_path = tmp.name
@@ -105,25 +104,29 @@ if audio_bytes is not None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 else:
-    st.markdown('<p style="text-align:center; color:#a0aec0;">(ریکارڈنگ شروع کرنے کے لیے مائیک آئیکن دبائیں)</p>', unsafe_allow_html=True)
+    st.markdown('<p style="text-align:center; color:#a0aec0;">(مائیک بٹن دبا کر ریکارڈنگ شروع کریں)</p>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ------------------- PROCESSING BUTTON (Works for Both Upload & Recording) -------------------
+# ------------------- PROCESSING BUTTON (Handles Upload or Recording) -------------------
 if st.button("✨ Generate Perfect Urdu Script", type="primary"):
-    # Use uploaded or recorded audio
+    # Determine raw_text source
     if uploaded_file:
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp:
             tmp.write(uploaded_file.read())
             temp_path = tmp.name
-        raw_text = "Your uploaded raw text"  # Replace with actual transcription code (same as before)
+        model = WhisperModel("small", device="cpu", compute_type="int8")
+        audio = decode_audio(temp_path)
+        audio = np.array(audio).astype("float32")
+        segments, _ = model.transcribe(audio, language="ur", vad_filter=True)
+        raw_text = " ".join([seg.text.strip() for seg in segments if seg.text.strip()])
         os.unlink(temp_path)
-    elif 'raw_text' in locals():  # From recording
+    elif 'raw_text' in locals() and raw_text:  # From recording
         pass
     else:
-        st.error("Please upload or record audio first")
+        st.error("Please upload a file or record voice first")
         st.stop()
 
-    # Chunking (10–15 lines, as before)
+    # Chunking (10–15 lines, ~180 words)
     sentences = re.split(r'(?<=[۔؟!])\s+', raw_text)
     chunks = []
     current_chunk = ""
@@ -138,7 +141,7 @@ if st.button("✨ Generate Perfect Urdu Script", type="primary"):
         chunks.append(current_chunk.strip())
 
     # LLM Correction
-    with st.spinner(f"AI Correcting ({len(chunks)} chunks)..."):
+    with st.spinner(f"AI Correcting Grammar & Spelling ({len(chunks)} chunks)..."):
         corrected_chunks = []
         progress_bar = st.progress(0)
         for i, chunk in enumerate(chunks):
@@ -150,9 +153,9 @@ if st.button("✨ Generate Perfect Urdu Script", type="primary"):
     perfect_urdu = re.sub(r'([؟۔!])\s*([ا-ی][^۔؟!]{40,})', r'\1\n\n\2', perfect_urdu)
 
     st.balloons()
-    st.success("✅ Perfect Urdu Script Generated!")
+    st.success("✅ Perfect Urdu Script Generated! (No Paraphrasing)")
 
-    # ------------------- OUTPUT DISPLAY (slice.wbrain.me Style: Clean Card) -------------------
+    # ------------------- OUTPUT DISPLAY (Clean Card Like slice.wbrain.me) -------------------
     st.markdown('<div class="card progress-card">', unsafe_allow_html=True)
     st.markdown(f"<div class='urdu'>{perfect_urdu}</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -187,4 +190,4 @@ if st.button("✨ Generate Perfect Urdu Script", type="primary"):
             st.warning(f"PDF failed: {e}. TXT download is perfect!")
 
 st.markdown('</div>', unsafe_allow_html=True)  # Close main div
-st.caption("Powered by faster-whisper + Groq MoonshotAI Kimi-K2 • Live Voice Recording Enabled")
+st.caption("Powered by faster-whisper + Groq MoonshotAI Kimi-K2 • Live Voice Recording Fixed")
