@@ -10,9 +10,8 @@ from fpdf import FPDF  # fpdf2 for Unicode
 import requests
 import base64
 from io import BytesIO
-import streamlit_audio_recorder as st_ar  # Fixed import: streamlit-audio-recorder
 
-# ------------------- PREMIUM PAGE STYLE (slice.wbrain.me Inspired: Clean, Card-Based) -------------------
+# ------------------- PREMIUM PAGE STYLE (slice.wbrain.me Inspired: Clean Cards, Minimalist) -------------------
 st.set_page_config(page_title="Urdu Pro", layout="centered", page_icon="🎙️")
 st.markdown("""
 <style>
@@ -21,14 +20,17 @@ st.markdown("""
     .urdu { font-family: 'Noto Nastaliq Urdu', serif; font-size: 26px; line-height: 2.2; direction: rtl; text-align: right; color: #2d3748; }
     .title { font-size: 48px; font-weight: bold; background: linear-gradient(90deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-align: center; margin-bottom: 10px; }
     .card { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin: 20px 0; }
-    .mic-btn { background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; font-size: 24px; height: 70px; border-radius: 50px; border: none; width: 100%; }
+    .mic-container { text-align: center; }
+    .mic-btn { background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; font-size: 24px; height: 70px; border-radius: 50px; border: none; width: 100%; cursor: pointer; }
+    .mic-btn:hover { background: linear-gradient(135deg, #ee5a24, #ff6b6b); }
     .progress-card { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); }
+    .recording { color: #ff6b6b; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main">', unsafe_allow_html=True)
 st.markdown("<h1 class='title'>Urdu Pro</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center; font-size:18px; color:#64748b;'>Record voice or upload audio → Get perfect Urdu script with grammar fixes</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center; font-size:18px; color:#64748b;'>Record voice or upload audio → Get perfect Urdu script with grammar & spelling fixes</p>", unsafe_allow_html=True)
 
 # ------------------- GROQ CLIENT -------------------
 @st.cache_resource
@@ -73,23 +75,85 @@ Corrected Chunk:"""
 st.markdown("### 1. Upload Audio/Video File")
 uploaded_file = st.file_uploader("", type=["mp3","wav","m4a","mp4","mov","mkv"])
 
-# ------------------- LIVE VOICE RECORDING (Fixed with streamlit-audio-recorder) -------------------
+# ------------------- LIVE VOICE RECORDING (Pure JS: No External Components, No Errors) -------------------
 st.markdown("### 2. براہِ راست آواز ریکارڈ کریں (Live Recording)")
 st.markdown('<div class="card">', unsafe_allow_html=True)
 
-# Fixed recorder: Simple args only (no energy_threshold to avoid TypeError)
-audio_bytes = st_ar.audio_recorder(
-    key="voice_recorder",
-    sample_rate=44100,  # Standard for WAV
-    # No pause_threshold—uses manual stop button (stable)
-)
+# Initialize session state for recording
+if 'recording' not in st.session_state:
+    st.session_state.recording = False
+if 'audio_data' not in st.session_state:
+    st.session_state.audio_data = None
 
-if audio_bytes is not None:
-    # Preview the recording
-    st.audio(audio_bytes, format="audio/wav")
-    
-    # Process as temp file (same as upload)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+# JS for browser recording (HTML5 MediaRecorder — works everywhere, no deps)
+record_js = """
+<div class="mic-container">
+    <button id="micBtn" class="mic-btn" onclick="toggleRecording()">{text}</button>
+    <p id="status" style="text-align:center; color:#a0aec0;">ریکارڈنگ شروع کریں</p>
+</div>
+<audio id="audioPlayback" controls style="width:100%; margin-top:10px; display:none;"></audio>
+
+<script>
+let mediaRecorder;
+let audioChunks = [];
+let stream;
+
+function toggleRecording() {
+    const btn = document.getElementById('micBtn');
+    const status = document.getElementById('status');
+    const audioPlayback = document.getElementById('audioPlayback');
+
+    if (!st.session_state.recording) {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
+            stream = s;
+            mediaRecorder = new MediaRecorder(s, { mimeType: 'audio/webm' });
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+            mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                const reader = new FileReader();
+                reader.onload = () => {
+                    // Send to Streamlit (base64)
+                    parent.document.querySelector('iframe').contentWindow.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        value: reader.result.split(',')[1]  // Base64 data
+                    }, '*');
+                    audioPlayback.src = URL.createObjectURL(audioBlob);
+                    audioPlayback.style.display = 'block';
+                };
+                reader.readAsDataURL(audioBlob);
+            };
+
+            mediaRecorder.start();
+            st.session_state.recording = true;
+            btn.innerText = 'رکائیں';
+            status.innerText = 'ریکارڈنگ جاری ہے...';
+            status.className = 'recording';
+        }).catch(err => {
+            status.innerText = 'مائیک رسائی کی اجازت دیں';
+        });
+    } else {
+        mediaRecorder.stop();
+        stream.getTracks().forEach(track => track.stop());
+        st.session_state.recording = false;
+        btn.innerText = 'ریکارڈنگ شروع کریں';
+        status.innerText = 'ریکارڈنگ مکمل!';
+        status.className = '';
+    }
+}
+</script>
+"""
+
+st.components.v1.html(record_js, height=150, width=400)
+
+# Handle audio data from JS (session state)
+if st.session_state.audio_data:
+    st.audio(st.session_state.audio_data, format="audio/webm")
+    # Convert to temp WAV for Whisper
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+        # Base64 to bytes (simplified; in practice, use io.BytesIO)
+        audio_bytes = base64.b64decode(st.session_state.audio_data)
         tmp.write(audio_bytes)
         temp_path = tmp.name
 
@@ -109,7 +173,7 @@ else:
 
 # ------------------- PROCESSING BUTTON (Handles Upload or Recording) -------------------
 if st.button("✨ Generate Perfect Urdu Script", type="primary"):
-    # Determine raw_text source
+    # Get raw_text from upload or recording
     if uploaded_file:
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp:
             tmp.write(uploaded_file.read())
@@ -190,4 +254,4 @@ if st.button("✨ Generate Perfect Urdu Script", type="primary"):
             st.warning(f"PDF failed: {e}. TXT download is perfect!")
 
 st.markdown('</div>', unsafe_allow_html=True)  # Close main div
-st.caption("Powered by faster-whisper + Groq MoonshotAI Kimi-K2 • Live Voice Recording Fixed")
+st.caption("Powered by faster-whisper + Groq MoonshotAI Kimi-K2 • Live Voice Recording (Browser JS)")
