@@ -6,3 +6,5 @@ numpy>=1.21.0
 torch>=2.0.0
 transformers>=4.40.0
 requests>=2.31.0
+streamlit-mic-recorder>=0.0.8
+webrtcvad>=2.0.10
