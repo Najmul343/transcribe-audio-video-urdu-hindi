@@ -1,68 +1,45 @@
 import streamlit as st
 from faster_whisper import WhisperModel
-import os
 import tempfile
+import os
 
-# ============== خوبصورت UI ==============
-st.set_page_config(page_title="اردو ٹرانسکرائبر", page_icon="Pakistan", layout="centered")
+st.set_page_config(page_title="اردو ٹرانسکرائبر", page_icon="Pakistan")
+
 st.title("Pakistan اردو آڈیو ٹرانسکرائبر")
-st.markdown("**WhatsApp وائس، یوٹیوب، لیکچر → فوراً خوبصورت اردو میں**")
-st.caption("تیز • مفت • Cloud پر چلتا ہے • 2025")
+st.markdown("**WhatsApp وائس، یوٹیوب، لیکچر → فوراً خوبصورت اردو**")
+st.caption("2025 • مفت • کوئی ایرر نہیں")
 
-# ============== ماڈل لوڈ ==============
+# ماڈل لوڈ کرو (صرف ایک بار)
 @st.cache_resource
-def load_model():
-    with st.spinner("ماڈل لوڈ ہو رہا ہے (صرف پہلی بار)..."):
-        return WhisperModel("medium", device="cpu", compute_type="int8")
+def get_model():
+    return WhisperModel("small", device="cpu", compute_type="int8")
 
-model = load_model()
-st.success("ماڈل تیار ہے!")
+model = get_model()
+st.success("ماڈل تیار!")
 
-# ============== فائل اپ لوڈ ==============
-uploaded_file = st.file_uploader(
-    "اپنی آڈیو یا ویڈیو فائل ڈالیں",
-    type=["mp3", "m4a", "wav", "ogg", "mp4", "webm", "mov"]
-)
+# فائل اپ لوڈ
+file = st.file_uploader("آڈیو/ویڈیو ڈالیں", type=["mp3","m4a","wav","mp4","webm","ogg"])
 
-if uploaded_file:
-    st.audio(uploaded_file)
+if file:
+    st.audio(file)
+    
+    if st.button("اردو میں تبدیل کریں"):
+        # فائل کو ٹیمپ میں سیو کرو
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(file.read())
+        path = tfile.name
+        tfile.close()
 
-    if st.button("اردو میں ٹرانسکریپٹ کریں", type="primary"):
-        # لازمی: فائل کو ٹیمپ فائل میں سیو کرو
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp:
-            tmp.write(uploaded_file.getvalue())
-            audio_path = tmp.name
+        with st.spinner("ٹرانسکریپٹ ہو رہا ہے..."):
+            segments, _ = model.transcribe(path, language="ur")
+            text = " ".join([s.text for s in segments])
 
-        try:
-            with st.spinner("ٹرانسکریپشن ہو رہی ہے..."):
-                segments, info = model.transcribe(
-                    audio_path,
-                    language="ur",
-                    vad_filter=True
-                )
-                text = " ".join([s.text.strip() for s in segments])
+        os.unlink(path)  # ڈیلیٹ کرو
 
-                # عام غلطیاں ٹھیک کرو
-                text = text.replace("ھے", "ہے").replace("اج", "آج").replace("ارہا", "آ رہا")
-                text = text.replace("لائی لائی", "لائ لائ").replace("ھو", "ہو")
-
-            st.success("کامیاب!")
-            st.subheader("خوبصورت اردو متن")
-            st.markdown(f"<div dir='rtl' style='font-size:18px; line-height:2;'>{text}</div>", 
-                       unsafe_allow_html=True)
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button("متن ڈاؤن لوڈ کریں", text, "urdu.txt")
-            with col2:
-                st.code(f"navigator.clipboard.writeText(`{text}`)")
-
-        finally:
-            if os.path.exists(audio_path):
-                os.unlink(audio_path)
-
+        st.success("تیار ہے!")
+        st.write(text)
+        st.download_button("ڈاؤن لوڈ", text, "urdu.txt")
 else:
-    st.info("اوپر فائل ڈال کر 'ٹرانسکریپٹ کریں' دبائیں")
+    st.info("اوپر فائل ڈال کر بٹن دبائیں")
 
-st.markdown("---")
-st.caption("پاکستانیوں کے لیے بنایا گیا • faster-whisper • 2025")
+st.balloons()
